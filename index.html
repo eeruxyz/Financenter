@@ -157,7 +157,7 @@ function defaults(){
  return {v:3,
   settings:{salary:11750000,essential:5351997,efMin:30000000,efTarget:35000000,bufMin:3000000,bufMax:5000000,
    carTarget:115000000,carMonth:'',fi1:1500000000,fi2:2000000000,ret:5,infl:0,scen:[5000000,7000000,10000000],
-   payday:28,trackStart:'2026-11',setupDone:false,goldMin:5,goldMax:10,eqT:{global:[50,60],id:[25,35],ind:[5,10]},eqWarn:5,phase:'auto',tol:1000,gap:2,newSalary:null,
+   payday:28,payShift:'none',trackStart:'2026-11',setupDone:false,goldMin:5,goldMax:10,eqT:{global:[50,60],id:[25,35],ind:[5,10]},eqWarn:5,phase:'auto',tol:1000,gap:2,newSalary:null,
    phasePct:{'1':{ef:50,cash:21,rdpu:12,gold:5,equity:12},'2':{car:40,equity:35,rdpu:12,gold:6,cash:7}}},
   cats:[
    {id:'housing',name:'Housing',kind:'fixed',hint:'Kost',payFrom:'cimb'},
@@ -221,7 +221,22 @@ function payFromOf(c){var a=act().find(function(x){return x.id===c.payFrom&&x.gr
 function envAccs(){var H=hub();return act().filter(function(a){return a.envelope&&a.group==='cash'&&!(H&&a.id===H.id);});}
 function isEnvCat(c){var id=payFromOf(c);return envAccs().some(function(a){return a.id===id;});}
 function firstTracked(){var ks=recs();return ks.length?ks[0]:(S.settings.trackStart||'2026-11');}
-function cycleLabel(k){var pd=+S.settings.payday||1;if(pd<=1)return mlabel(k);var p=k.split('-').map(Number),pr=madd(k,-1).split('-').map(Number);return mlabel(k)+' · '+pd+' '+MN[pr[1]-1]+' – '+(pd-1)+' '+MN[p[1]-1];}
+function pad2(n){return (n<10?'0':'')+n;}
+function parseISO(s){var p=String(s||'').split('-').map(Number);return (p.length===3&&p[0]&&p[1]&&p[2])?new Date(Date.UTC(p[0],p[1]-1,p[2])):null;}
+function fmtISO(dt){return dt.getUTCFullYear()+'-'+pad2(dt.getUTCMonth()+1)+'-'+pad2(dt.getUTCDate());}
+function addDays(dt,n){return new Date(dt.getTime()+n*86400000);}
+function fmtD(dt){return dt.getUTCDate()+' '+MN[dt.getUTCMonth()];}
+function defaultPayDate(k){
+ var pd=+S.settings.payday||28,sm=pd>1?madd(k,-1):k,p=sm.split('-').map(Number),dim=new Date(Date.UTC(p[0],p[1],0)).getUTCDate();
+ var dt=new Date(Date.UTC(p[0],p[1]-1,Math.min(pd,dim)));
+ if(S.settings.payShift==='fri'){var wd=dt.getUTCDay();if(wd===6)dt=addDays(dt,-1);else if(wd===0)dt=addDays(dt,-2);}
+ return dt;
+}
+function payDateOf(k){var r=S.records[k],d=r&&r.payDate?parseISO(r.payDate):null;return d||defaultPayDate(k);}
+function cycleRange(k){return {s:payDateOf(k),e:addDays(payDateOf(madd(k,1)),-1)};}
+function cycleLabel(k){var r=cycleRange(k);return mlabel(k)+' · '+fmtD(r.s)+' – '+fmtD(r.e);}
+function liveCats(){return S.cats.filter(function(c){return !c.archived;});}
+function catHasData(id){return recs().some(function(k){var e=S.records[k].exp;return e&&e[id]>0;});}
 /* effective transfers = typed transfers + money taken from other pos (cover) + repayments */
 function ecOf(rec){
  var o=Object.assign({},rec.contrib||{}),H=hub(),E=envAccs()[0];
@@ -249,9 +264,9 @@ function owedAt(m,incl){
 }
 function budgetRows(m,rec){
  var B=(planFor(m)||{}).exp||{},rows=[];
- S.cats.forEach(function(c){if(isEnvCat(c))return;rows.push({n:c.name,h:c.hint||'',kind:c.kind,b:B[c.id]||0,a:(rec.exp&&rec.exp[c.id])||0,est:false});});
+ S.cats.forEach(function(c){if(isEnvCat(c))return;var a_=(rec.exp&&rec.exp[c.id])||0;if(c.archived&&!a_)return;rows.push({n:c.name+(c.archived?' (arsip)':''),h:c.hint||'',kind:c.kind,b:c.archived?0:(B[c.id]||0),a:a_,est:false});});
  envAccs().forEach(function(a){
-  var cs=S.cats.filter(function(c){return payFromOf(c)===a.id;}),es=rec.es?rec.es[a.id]:null;
+  var cs=liveCats().filter(function(c){return payFromOf(c)===a.id;}),es=rec.es?rec.es[a.id]:null;
   rows.push({n:'Daily — '+a.name,h:cs.map(function(c){return c.hint||c.name;}).join(', '),kind:'env',b:sum(cs.map(function(c){return B[c.id]||0;})),a:spendOf(rec,a.id),est:es==null});
  });
  return rows;
@@ -659,6 +674,8 @@ function vUpdate(){
   '<div class="live"><span>Surplus <b class="lv-sur"></b></span><span>Dipindahkan ke rekening lain <b class="lv-alloc"></b></span><span>Sisa tetap di CIMB <b class="lv-un"></b></span></div></section>';
  h+='<div id="uform">';
  h+='<section class="card"><h2>Langkah 1 · Hari gajian</h2>';
+ var pdv=payDateOf(m),endv=addDays(payDateOf(madd(m,1)),-1);
+ h+='<label class="f" style="max-width:300px;margin-bottom:14px">Tanggal gajian siklus ini<small>Ubah kalau gajian maju/mundur (mis. jatuh di akhir pekan). Siklus berakhir ±'+fmtD(endv)+'; tanggal gajian berikutnya diatur di Settings atau saat siklus itu diisi.</small><input type="date" name="paydate" value="'+fmtISO(pdv)+'"></label>';
  h+='<h3>Income</h3><label class="f">Gaji / income utama'+mi('income',src.income,'0')+'</label><div style="margin-top:10px" class="lbl">Income lain (bonus, THR, kompensasi, freelance)</div><div id="xrows">'+(src.extra||[]).map(function(x){return xrow(x.label,x.amount);}).join('')+'</div><button class="btn sm" data-act="addx">+ Tambah income lain</button>';
  var ow=owedAt(m,false);
  if(ow.length)h+='<h3 style="margin-top:16px">Ganti pos yang pernah diambil</h3><p class="sub">Siklus sebelumnya uang diambil dari pos berikut. Isi jumlah yang <b>benar-benar kamu transfer kembali</b> bulan ini (ditambahkan ke pos itu, dikurangi dari sisa CIMB). Kosongkan kalau belum.</p><div class="fg">'+ow.map(function(o){return '<label class="f">'+esc(o.name)+'<small>kurang '+rp(o.amt)+' · '+esc(o.notes)+'</small>'+mi('repay:'+o.id,rec?((rec.repay&&rec.repay[o.id])||0):o.amt,'0')+'</label>';}).join('')+'</div>';
@@ -675,7 +692,7 @@ function vUpdate(){
   (H?'<div class="note">Perkiraan saldo '+esc(H.name)+' di akhir siklus: <b class="lv-cimb">—</b><span class="lv-cimbw"></span></div>':'')+
   '<div class="note"><b>Dari mana angkanya?</b> <i>Rencana</i> = angka tetapanmu di Goals (terisi otomatis). <i>Saran</i> = surplus × persentase fase aktif — '+esc(phName)+': '+esc(pTxt)+'. Fase 1 mengikuti pola rencana awalmu; Fase 2 memakai pedoman rentangmu (Car 35–50%, Equity 30–40%, RDPU 10–20%, Gold 5–10%, Buffer 5–10%). Hanya patokan, tidak ada transaksi otomatis. Persentase bisa diubah di Settings.</div>'+
   '<div class="row" style="margin-top:12px"><button class="btn" data-act="saveopen">Simpan Langkah 1 (gajian)</button></div></section>';
- h+='<section class="card"><h2>Langkah 2 · Akhir siklus</h2><h3>Pengeluaran tetap</h3><p class="sub">Total bulan ini per kategori. Angka awal = budget dari rencana.</p><div class="fg">'+S.cats.filter(function(c){return !isEnvCat(c);}).map(function(c){var pf_=S.accounts.find(function(a){return a.id===payFromOf(c);});return '<label class="f">'+esc(c.name)+'<small>'+esc(c.hint||c.kind)+(pf_?' · dibayar dari '+esc(pf_.name):'')+'</small>'+mi('exp:'+c.id,(src.exp&&src.exp[c.id])||0,'0')+'</label>';}).join('')+'</div>';
+ h+='<section class="card"><h2>Langkah 2 · Akhir siklus</h2><h3>Pengeluaran tetap</h3><p class="sub">Total bulan ini per kategori. Angka awal = budget dari rencana.</p><div class="fg">'+liveCats().filter(function(c){return !isEnvCat(c);}).map(function(c){var pf_=S.accounts.find(function(a){return a.id===payFromOf(c);});return '<label class="f">'+esc(c.name)+'<small>'+esc(c.hint||c.kind)+(pf_?' · dibayar dari '+esc(pf_.name):'')+'</small>'+mi('exp:'+c.id,(src.exp&&src.exp[c.id])||0,'0')+'</label>';}).join('')+'</div>';
  E.forEach(function(a){var cs=S.cats.filter(function(c){return payFromOf(c)===a.id;});h+='<div class="note"><b>Belanja harian — '+esc(a.name)+'</b> ('+esc(cs.map(function(c){return c.hint||c.name;}).join(', '))+'): tidak perlu dicatat satu per satu. Isi saldo '+esc(a.name)+' di Cek saldo di bawah; sistem menghitung belanja = saldo awal + top-up − saldo akhir. Hasil: <b data-env="'+a.id+'">—</b> (budget '+rps(sum(cs.map(function(c){return (src.exp&&src.exp[c.id])||0;})))+').</div>';});
  if(E.length){h+='<h3 style="margin-top:16px">Ambil dari pos lain</h3><p class="sub">Pakai kalau '+esc(E[0].name)+' habis lalu kamu mengambil dari pos lain. Pos asal berkurang, '+esc(E[0].name)+' bertambah, dan di gajian berikutnya sistem mengingatkan untuk menggantinya. Untuk mengambil dari '+(H?esc(H.name):'kas')+', cukup naikkan top-up di Langkah 1.</p><div id="crows">'+((src.cover||[]).map(function(c){return crow(c,coverOpts(c.from));}).join(''))+'</div><button class="btn sm" data-act="addc">+ Tambah pengambilan</button>';}
  var eqa=grp('equity')[0];
@@ -696,7 +713,8 @@ function readForm(){
  f.querySelectorAll('#xrows .xrow').forEach(function(r){var a=pm(r.querySelector('.xa').value);if(a)rec.extra.push({label:r.querySelector('.xl').value||'Other income',amount:a});});
  f.querySelectorAll('.crow').forEach(function(r){var a=pm(r.querySelector('.ca').value);if(a)rec.cover.push({from:r.querySelector('.cf').value,amount:a,note:r.querySelector('.cn').value.trim()});});
  f.querySelectorAll('[data-f^="repay:"]').forEach(function(el){var id=el.getAttribute('data-f').slice(6),v=pm(el.value);if(v)rec.repay[id]=v;});
- S.cats.forEach(function(c){rec.exp[c.id]=isEnvCat(c)?((pf.exp&&pf.exp[c.id])||0):(g('exp:'+c.id)||0);});
+ var oldR=S.records[ui.umonth];S.cats.forEach(function(c){rec.exp[c.id]=c.archived?((oldR&&oldR.exp&&oldR.exp[c.id])||0):(isEnvCat(c)?((pf.exp&&pf.exp[c.id])||0):(g('exp:'+c.id)||0));});
+ rec.payDate=(f.querySelector('[name=paydate]')||{}).value||null;
  act().forEach(function(a){rec.bal[a.id]=g('bal:'+a.id);rec.contrib[a.id]=(H&&a.id===H.id)?0:(gs('contrib:'+a.id)||0);});
  EQ.forEach(function(x){rec.eq[x[0]]=g('eq:'+x[0]);});
  var ea=grp('equity')[0],es=EQ.map(function(x){return rec.eq[x[0]];}).filter(function(v){return v!=null;});
@@ -795,7 +813,7 @@ function vGoals(){
  var totInc=function(p){return (p.income||0)+(p.other||0);},totExp=function(p){return sum(S.cats.map(function(c){return p.exp[c.id]||0;}));};
  var ed='<section class="card"><h3>Rencana bulanan &amp; pembagian surplus</h3><p class="sub">Ini angka acuan: dipakai sebagai budget, nilai awal di Monthly Update, dan pembanding plan vs aktual. Sisa surplus otomatis menjadi saldo CIMB. Bulan ½ = setengah bulan (kontrak selesai). ✓ = siklus yang sudah berjalan sebelum tracking dimulai (sudah ada di saldo awal).</p><div class="scroll" id="planscroll"><table>'+th+
   row('<b>Income</b>',function(k,p){return pinp(k,'income',p.income);})+row('Income lain',function(k,p){return pinp(k,'other',p.other);})+
-  S.cats.map(function(c){return row(esc(c.name),function(k,p){return pinp(k,'exp:'+c.id,p.exp[c.id]);});}).join('')+
+  liveCats().map(function(c){return row(esc(c.name),function(k,p){return pinp(k,'exp:'+c.id,p.exp[c.id]);});}).join('')+
   row('Total expenses',function(k,p){return rp(totExp(p));},'tot')+row('Surplus',function(k,p){return rp(planSurplus(p));},'tot')+
   AC.map(function(a){return row('→ '+esc(a.name),function(k,p){return pinp(k,'alloc:'+a.id,p.alloc[a.id]);});}).join('')+
   row('→ '+(H?esc(H.name):'Kas')+' (sisa otomatis)',function(k,p){var d=planKeep(p);return '<span class="'+(d<0?'down':'')+'">'+rp(d)+'</span>'+(d<0?' ⚠':'');},'tot')+
@@ -815,14 +833,22 @@ function vSettings(){
  var s=S.settings,ms=function(k,l,sm){return '<label class="f">'+l+(sm?'<small>'+sm+'</small>':'')+'<input class="mi" inputmode="numeric" data-s="'+k+'" value="'+fnum(s[k])+'"></label>';};
  var nn=function(a,l,v,sm){return '<label class="f">'+l+(sm?'<small>'+sm+'</small>':'')+'<input type="text" inputmode="decimal" data-sn="'+a+'" value="'+String(v).replace('.',',')+'"></label>';};
  var h='<section class="card"><h2>Settings</h2><p class="sub">Semua perubahan tersimpan otomatis di browser ini.</p></section>';
+ var dOpts='';for(var di=1;di<=31;di++)dOpts+='<option value="'+di+'"'+(di===(+s.payday||28)?' selected':'')+'>'+di+'</option>';
+ var tOpts='',tk0=Object.keys(S.plan).sort()[0]||'2026-10';for(var ti=0;ti<18;ti++){var tk=madd(tk0,ti);tOpts+='<option value="'+tk+'"'+(tk===s.trackStart?' selected':'')+'>'+cycleLabel(tk)+'</option>';}
+ h+='<section class="card"><h3>Siklus &amp; tanggal gajian</h3><p class="sub">Satu siklus = gajian ke gajian. Tanggal tiap siklus bisa disesuaikan lagi di Monthly Update (Langkah 1).</p><div class="fg"><label class="f">Tanggal gajian rutin<small>Tanggal 1 = siklus mengikuti bulan kalender</small><select data-sn="payday">'+dOpts+'</select></label><label class="f">Kalau jatuh di Sabtu / Minggu<select data-sv="payShift"><option value="none"'+(s.payShift==='fri'?'':' selected')+'>Tetap di tanggal itu</option><option value="fri"'+(s.payShift==='fri'?' selected':'')+'>Geser ke Jumat sebelumnya</option></select></label><label class="f">Siklus pertama yang dilacak<small>Berlaku sebelum ada siklus yang tercatat</small><select data-sv="trackStart">'+tOpts+'</select></label></div></section>';
  h+='<section class="card"><h3>Target &amp; asumsi</h3><div class="fg">'+ms('salary','Income default / bulan')+ms('essential','Pengeluaran esensial / bulan','Dasar hitung coverage Emergency Fund')+ms('efMin','Emergency Fund — batas bawah')+ms('efTarget','Emergency Fund — target penuh')+ms('bufMin','Buffer minimum')+ms('bufMax','Buffer maksimum')+ms('carTarget','Target Car Fund','Rp100 jt mobil + Rp15 jt reserve')+
-  '<label class="f">Bulan target Car Fund (opsional)<small>Format 2027-12; kosong = ikut plan</small><input type="text" data-sv="carMonth" placeholder="YYYY-MM" value="'+esc(s.carMonth||'')+'"></label>'+ms('fi1','FI target 1')+ms('fi2','FI target 2')+nn('ret','Return ilustrasi (% / tahun)',s.ret,'Hanya skenario, tidak dijamin')+nn('infl','Inflasi (% / tahun)',s.infl,'0 = abaikan inflasi')+nn('payday','Tanggal gajian',s.payday,'Siklus berjalan dari tanggal ini sampai sehari sebelum gajian berikutnya')+'<label class="f">Siklus pertama yang dilacak<small>Format 2026-11</small><input type="text" data-sv="trackStart" value="'+esc(s.trackStart||'')+'"></label>'+ms('tol','Toleransi selisih saldo','Selisih sistem vs aplikasi bank di bawah ini dianggap cocok')+'</div></section>';
+  '<label class="f">Bulan target Car Fund (opsional)<small>Format 2027-12; kosong = ikut plan</small><input type="text" data-sv="carMonth" placeholder="YYYY-MM" value="'+esc(s.carMonth||'')+'"></label>'+ms('fi1','FI target 1')+ms('fi2','FI target 2')+nn('ret','Return ilustrasi (% / tahun)',s.ret,'Hanya skenario, tidak dijamin')+nn('infl','Inflasi (% / tahun)',s.infl,'0 = abaikan inflasi')+ms('tol','Toleransi selisih saldo','Selisih sistem vs aplikasi bank di bawah ini dianggap cocok')+'</div></section>';
  h+='<section class="card"><h3>Skenario kontribusi FI</h3><div class="fg">'+s.scen.map(function(v,i){return '<label class="f">Skenario '+(i+1)+'<input class="mi" inputmode="numeric" data-sc="'+i+'" value="'+fnum(v)+'"></label>';}).join('')+'</div></section>';
  h+='<section class="card"><h3>Target portofolio</h3><div class="fg">'+nn('goldMin','Gold min (% aset)',s.goldMin)+nn('goldMax','Gold max (% aset)',s.goldMax)+nn('eqWarn','Warning rebalancing (poin)',s.eqWarn)+'</div><div class="scroll" style="margin-top:10px"><table><tr><th>Equity</th><th class="n">Min %</th><th class="n">Max %</th></tr>'+EQ.map(function(x){return '<tr><td>'+x[1]+'</td><td class="n"><input type="text" inputmode="decimal" data-eq="'+x[0]+'|0" value="'+s.eqT[x[0]][0]+'"></td><td class="n"><input type="text" inputmode="decimal" data-eq="'+x[0]+'|1" value="'+s.eqT[x[0]][1]+'"></td></tr>';}).join('')+'</table></div></section>';
  var phs=['1','2'].map(function(p){var P=s.phasePct[p]||{},t=sum(Object.keys(P).map(function(g){return P[g];}));return '<div><div class="lbl">'+(p==='1'?'Fase 1 — Emergency building':'Fase 2 — Emergency fund complete')+' · total <span style="color:var(--'+(t===100?'g':'r')+')">'+t+'%'+(t===100?'':' (harus 100%)')+'</span></div>'+Object.keys(P).map(function(g){return '<label class="f">'+GROUPS[g].label+(g==='cash'?' (sisa di CIMB)':'')+'<input type="text" inputmode="decimal" data-ph="'+p+'|'+g+'" value="'+P[g]+'"></label>';}).join('')+'</div>';}).join('');
  h+='<section class="card"><h3>Fase &amp; saran pembagian</h3><label class="f" style="max-width:320px">Fase aktif<select data-sv="phase"><option value="auto"'+(s.phase==='auto'?' selected':'')+'>Otomatis (Fase 2 saat Emergency Fund penuh)</option><option value="1"'+(s.phase==='1'?' selected':'')+'>Fase 1</option><option value="2"'+(s.phase==='2'?' selected':'')+'>Fase 2</option></select></label><div class="fg" style="margin-top:12px">'+phs+'</div><p class="disc">Fase 1 mengikuti pola pembagian rencana awalmu. Fase 2 memakai pedoman rentangmu: Car 35–50%, Equity 30–40%, RDPU 10–20%, Gold 5–10%, Buffer 5–10%. Saran saja, bukan transaksi otomatis.</p></section>';
  var cashOpts=act().filter(function(a){return a.group==='cash';});
- h+='<section class="card"><h3>Kategori pengeluaran</h3><p class="sub">“Dibayar dari” menentukan rekening kas mana yang berkurang. Ini membuat saldo sistem sama dengan aplikasi bank.</p><div class="scroll"><table><tr><th>Kategori</th><th>Jenis</th><th>Dibayar dari</th></tr>'+S.cats.map(function(c){return '<tr><td>'+esc(c.name)+(c.hint?' <span class="mut small">'+esc(c.hint)+'</span>':'')+'</td><td>'+esc(c.kind)+'</td><td><select data-cp="'+c.id+'" style="min-width:130px">'+cashOpts.map(function(a){return '<option value="'+a.id+'"'+(a.id===payFromOf(c)?' selected':'')+'>'+esc(a.name)+'</option>';}).join('')+'</select></td></tr>';}).join('')+'</table></div>'+act().filter(function(a){return a.group==='cash'&&!(hub()&&a.id===hub().id);}).map(function(a){return '<label class="f" style="margin-top:10px;max-width:420px">Pola amplop untuk '+esc(a.name)+'<small>Ya = belanja dihitung dari saldo (tidak dicatat per transaksi)</small><select data-env="'+a.id+'"><option value="1"'+(a.envelope?' selected':'')+'>Ya</option><option value="0"'+(a.envelope?'':' selected')+'>Tidak</option></select></label>';}).join('')+'<div class="fg" style="margin-top:10px"><label class="f">Nama kategori baru<input type="text" id="nc-name" placeholder="mis. Insurance"></label><label class="f">Jenis<select id="nc-kind"><option value="fixed">Fixed</option><option value="variable">Variable</option><option value="debt">Debt</option></select></label></div><div class="row" style="margin-top:10px"><button class="btn primary" data-act="addcat">Tambah kategori</button></div></section>';
+ var archC=S.cats.filter(function(c){return c.archived;});
+ var kOpts=function(k){return [['fixed','Fixed'],['variable','Variable'],['debt','Debt']].map(function(x){return '<option value="'+x[0]+'"'+(x[0]===k?' selected':'')+'>'+x[1]+'</option>';}).join('');};
+ h+='<section class="card"><h3>Kategori pengeluaran</h3><p class="sub">Ubah nama, keterangan, jenis, dan “dibayar dari” langsung di tabel. <b>Hapus</b> menghilangkan kategori yang belum punya riwayat; kalau sudah punya riwayat, kategori <b>diarsipkan</b> (hilang dari form dan rencana, angka lama tetap ada di laporan).</p><div class="scroll"><table><tr><th>Nama</th><th>Keterangan</th><th>Jenis</th><th>Dibayar dari</th><th></th></tr>'+liveCats().map(function(c){return '<tr><td><input type="text" data-cn="'+c.id+'" value="'+esc(c.name)+'" style="min-width:120px"></td><td><input type="text" data-ch="'+c.id+'" value="'+esc(c.hint||'')+'" style="min-width:130px"></td><td><select data-ck="'+c.id+'">'+kOpts(c.kind)+'</select></td><td><select data-cp="'+c.id+'" style="min-width:110px">'+cashOpts.map(function(a){return '<option value="'+a.id+'"'+(a.id===payFromOf(c)?' selected':'')+'>'+esc(a.name)+'</option>';}).join('')+'</select></td><td>'+cbtn('delcat:'+c.id,catHasData(c.id)?'Arsipkan':'Hapus','sm danger')+'</td></tr>';}).join('')+'</table></div>'+
+  (archC.length?'<div class="lbl" style="margin-top:12px">Diarsipkan</div>'+archC.map(function(c){return '<div class="kv"><span>'+esc(c.name)+'</span><button class="btn sm" data-act="unarch:'+c.id+'">Aktifkan lagi</button></div>';}).join(''):'')+
+  act().filter(function(a){return a.group==='cash'&&!(hub()&&a.id===hub().id);}).map(function(a){return '<label class="f" style="margin-top:10px;max-width:420px">Pola amplop untuk '+esc(a.name)+'<small>Ya = belanja dihitung dari saldo (tidak dicatat per transaksi)</small><select data-env="'+a.id+'"><option value="1"'+(a.envelope?' selected':'')+'>Ya</option><option value="0"'+(a.envelope?'':' selected')+'>Tidak</option></select></label>';}).join('')+
+  '<div class="fg" style="margin-top:12px"><label class="f">Tambah kategori baru<input type="text" id="nc-name" placeholder="mis. Insurance"></label><label class="f">Jenis<select id="nc-kind"><option value="fixed">Fixed</option><option value="variable">Variable</option><option value="debt">Debt</option></select></label></div><div class="row" style="margin-top:10px"><button class="btn primary" data-act="addcat">Tambah kategori</button></div></section>';
  h+='<section class="card"><h3>Backup &amp; restore</h3><p class="sub">Data tersimpan di browser ini saja. Salin teks di bawah ke tempat aman secara berkala, dan tempel kembali untuk memulihkan.</p><textarea id="bk" spellcheck="false">'+esc(JSON.stringify(S))+'</textarea><div class="row" style="margin-top:10px"><button class="btn" data-act="copybk">Copy backup</button><button class="btn primary" data-act="import">Restore dari teks</button>'+cbtn('reset','Reset semua data','danger')+'</div></section>';
  return h;
 }
@@ -860,6 +886,8 @@ document.addEventListener('click',function(e){
  if(a==='setupdone'){var any=act().some(function(x){return x.start!=null;});if(!any){ui.msg='Isi minimal satu saldo rekening dulu.';render();return;}S.settings.setupDone=true;save();ui.msg='Data aset awal tersimpan. Tracking dimulai dari siklus '+mlabel(firstTracked())+'.';render();window.scrollTo(0,0);return;}
  if(a==='setupedit'){if(!recs().length){S.settings.setupDone=false;save();render();window.scrollTo(0,0);}else{ui.tab='assets';render();window.scrollTo(0,0);}return;}
  if(a==='saveopen'||a==='saveclose'){doSave(a==='saveclose'?'closed':'open');return;}
+ if(a==='delcat'){if(two('delcat:'+arg)){var dc=S.cats.find(function(x){return x.id===arg;});if(dc){Object.keys(S.plan).forEach(function(k){delete S.plan[k].exp[arg];});if(catHasData(arg)){dc.archived=true;ui.msg='Kategori '+dc.name+' diarsipkan — angka lama tetap ada di laporan.';}else{S.cats=S.cats.filter(function(x){return x.id!==arg;});ui.msg='Kategori '+dc.name+' dihapus.';}recompute();save();render();}}return;}
+ if(a==='unarch'){var uc=S.cats.find(function(x){return x.id===arg;});if(uc){uc.archived=false;save();render();}return;}
  if(a==='addc'){var dd=document.createElement('div');dd.innerHTML=crow(null,coverOpts());document.getElementById('crows').appendChild(dd.firstChild);return;}
  if(a==='addx'){var d=document.createElement('div');d.innerHTML=xrow('',0);document.getElementById('xrows').appendChild(d.firstChild);return;}
  if(a==='rmx'){var r=b.closest('.xrow');if(r)r.remove();updateLive();return;}
@@ -886,6 +914,9 @@ document.addEventListener('change',function(e){
  if(t.closest&&t.closest('#uform'))return;
  var v2=pm(t.value),num=parseFloat(String(t.value).replace(',','.'));
  if(d.cp){var c=S.cats.find(function(x){return x.id===d.cp;});if(c){c.payFrom=t.value;recompute();}}
+ else if(d.cn){var c1=S.cats.find(function(x){return x.id===d.cn;});if(c1&&t.value.trim())c1.name=t.value.trim();}
+ else if(d.ch){var c2=S.cats.find(function(x){return x.id===d.ch;});if(c2)c2.hint=t.value.trim();}
+ else if(d.ck){var c3=S.cats.find(function(x){return x.id===d.ck;});if(c3)c3.kind=t.value;}
  else if(d.env){var ea=S.accounts.find(function(x){return x.id===d.env;});if(ea){ea.envelope=t.value==='1';recompute();}}
  else if(d.s){if(d.s==='newSalary')S.settings.newSalary=v2;else if(v2!=null)S.settings[d.s]=v2;}
  else if(d.sn){if(isFinite(num))S.settings[d.sn]=num;}
